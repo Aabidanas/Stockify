@@ -1,30 +1,30 @@
-from fastapi import UploadFile, File
+from fastapi import UploadFile, File, FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
 import io
 import os
 import json
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from supabase import create_client, Client
 import google.generativeai as genai
 
-SUPABASE_URL="https://sgzwvrbyykkrazsnssbx.supabase.co"
-SUPABASE_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNnend2cmJ5eWtrcmF6c25zc2J4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQzOTk5MTAsImV4cCI6MjA3OTk3NTkxMH0.ZCoGTqteGdFJNgsrSs4NBnZ99A94KyxIl44QGtR4rVU"
-GEMINI_API_KEY="AIzaSyAdykZG_nFSVaNhLpEd3rmwVIYPXwPXNDc"
-
-# --- PASTE YOUR KEYS HERE ---
-# Load keys from the "Environment" (The Cloud's Secret Vault)
-# We use 'os.environ.get' so the code finds keys on Render automatically
+# --- 1. SETUP CREDENTIALS ---
+# I removed the hardcoded keys from here. 
+# It is dangerous to keep them in the file (anyone on GitHub can steal them!)
+# We will rely entirely on Render's Environment Variables.
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
+# --- 2. SETUP CLIENTS ---
+# If these crash locally, make sure you have a .env file or set vars in terminal
+if not SUPABASE_URL:
+    print("WARNING: Secrets not found. Did you set them in Render?")
 
-# --- SETUP CLIENTS ---
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 genai.configure(api_key=GEMINI_API_KEY)
-# Use 'gemini-pro' since we know it works for you
+
+# CORRECTED: You were right! Using 2.5 Flash.
 model = genai.GenerativeModel('gemini-2.5-flash')
 
 app = FastAPI()
@@ -44,8 +44,14 @@ class VoiceCommand(BaseModel):
 def read_root():
     return {"status": "AI Brain is Online"}
 
-# --- THIS IS THE CRITICAL PART ---
-# The word 'command' inside the parentheses below defines the variable!
+# --- 3. THE MISSING ENDPOINT (CRITICAL FIX) ---
+# Your HTML was trying to fetch this, but it didn't exist!
+# This is why it said "Connection Failed".
+@app.get("/inventory")
+def get_inventory():
+    response = supabase.table("inventory").select("*").execute()
+    return response.data
+
 @app.post("/voice-action")
 def process_voice(command: VoiceCommand): 
     print(f"Received: {command.text}")
@@ -86,7 +92,7 @@ def process_voice(command: VoiceCommand):
                     supabase.table("inventory").update({"quantity": new_stock}).eq("id", current_id).execute()
                     updates_made.append(f"Updated {item_name}: {current_stock} -> {new_stock}")
                 else:
-                    updates_made.append(f"Error: Could not find '{item_name}' in inventory (Did you add it to Supabase?)")
+                    updates_made.append(f"Error: Could not find '{item_name}' in inventory")
 
         return {"ai_analysis": data, "db_updates": updates_made}
 
@@ -98,12 +104,10 @@ async def scan_bill(file: UploadFile = File(...)):
     print(f"Received file: {file.filename}")
     
     try:
-        # 1. Read the image file
         contents = await file.read()
         image_part = {"mime_type": file.content_type, "data": contents}
 
-        # 2. Ask Gemini to read the bill
-        # Note: We use 'gemini-1.5-flash' because it handles images best (and is free)
+        # Using 2.5 Flash for Vision as well
         vision_model = genai.GenerativeModel('gemini-2.5-flash') 
         
         prompt = """
@@ -112,7 +116,7 @@ async def scan_bill(file: UploadFile = File(...)):
         Format: { "items": [ { "item": "milk", "quantity": 1, "unit": "liter" } ] }
         
         IMPORTANT:
-        1. Use SINGULAR, LOWERCASE names (e.g. "egg", not "Eggs").
+        1. Use SINGULAR, LOWERCASE names (e.g. "egg", not "eggs").
         2. Ignore non-food items (taxes, plastic bags).
         """
 
@@ -120,7 +124,6 @@ async def scan_bill(file: UploadFile = File(...)):
         clean_text = response.text.replace("```json", "").replace("```", "").strip()
         data = json.loads(clean_text)
 
-        # 3. Update Supabase (Add items)
         items = data.get("items", [])
         logs = []
 
@@ -128,17 +131,14 @@ async def scan_bill(file: UploadFile = File(...)):
             name = item["item"]
             qty = float(item["quantity"])
             
-            # Check if item exists
             existing = supabase.table("inventory").select("*").ilike("item_name", name).execute()
             
             if existing.data:
-                # Update existing
                 current_qty = float(existing.data[0]['quantity'])
                 new_qty = current_qty + qty
                 supabase.table("inventory").update({"quantity": new_qty}).eq("id", existing.data[0]['id']).execute()
                 logs.append(f"Added {qty} to {name} (Total: {new_qty})")
             else:
-                # Create new
                 supabase.table("inventory").insert({"item_name": name, "quantity": qty, "unit": "unit"}).execute()
                 logs.append(f"Created new item: {name} ({qty})")
 
