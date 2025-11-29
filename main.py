@@ -146,3 +146,30 @@ async def scan_bill(file: UploadFile = File(...)):
 
     except Exception as e:
         return {"error": str(e)}
+
+# --- 4. SMART SHOPPING LIST ENDPOINT ---
+@app.get("/shopping-list")
+def get_shopping_list():
+    # 1. Fetch all inventory
+    response = supabase.table("inventory").select("*").execute()
+    data = response.data
+    
+    shopping_list = []
+    
+    # 2. Logic: If Quantity < Threshold, add to list
+    for item in data:
+        # Get threshold (default to 2 if missing)
+        safe_limit = item.get('threshold') or 2.0
+        current_qty = float(item['quantity'])
+        
+        if current_qty < safe_limit:
+            needed = safe_limit - current_qty
+            shopping_list.append({
+                "item_name": item['item_name'], # We use item_name to match your DB
+                "quantity": round(current_qty, 2),
+                "needed": round(needed, 2),
+                "unit": item['unit']
+            })
+            
+    return shopping_list
+
