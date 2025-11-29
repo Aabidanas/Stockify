@@ -4,3 +4,4 @@ supabase
 python-dotenv
 google-generativeai
 pydantic
+python-multipart
