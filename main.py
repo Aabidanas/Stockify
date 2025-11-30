@@ -70,6 +70,31 @@ def add_manual(item: ManualItem):
         }).execute()
         return {"status": "Created", "item": item.item_name}
 
+# --- NEW: Manual Consume Endpoint (For Cook Tab) ---
+@app.post("/inventory/consume")
+def consume_manual(item: ManualItem):
+    # 1. Find the item (Case insensitive)
+    existing = supabase.table("inventory").select("*").ilike("item_name", item.item_name).execute()
+    
+    if existing.data:
+        current_data = existing.data[0]
+        current_qty = float(current_data['quantity'])
+        
+        # 2. Subtract quantity (ensure it doesn't go below 0)
+        new_qty = max(0, current_qty - item.quantity)
+        
+        # 3. Update DB
+        supabase.table("inventory").update({"quantity": new_qty}).eq("id", current_data['id']).execute()
+        
+        return {
+            "status": "Consumed", 
+            "item": item.item_name, 
+            "previous": current_qty, 
+            "new": new_qty
+        }
+    else:
+        return {"status": "Error", "message": "Item not found in inventory"}
+
 @app.get("/shopping-list")
 def get_shopping_list():
     response = supabase.table("inventory").select("*").execute()
@@ -143,3 +168,4 @@ async def scan_bill(file: UploadFile = File(...)):
             logs.append(f"Added {name}")
         return {"status": "success", "logs": logs}
     except Exception as e: return {"error": str(e)}
+
